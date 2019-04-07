@@ -1,11 +1,11 @@
 package grpclb
 
 import (
+	"context"
 	"errors"
 	"math/rand"
 	"time"
 
-	"context"
 	"google.golang.org/grpc"
 )
 

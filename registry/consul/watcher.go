@@ -2,35 +2,44 @@ package consul
 
 import (
 	// "encoding/json"
-	"fmt"
+	"context"
+	"errors"
 	"net"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/hashicorp/consul/api"
-	"google.golang.org/grpc/grpclog"
 	"google.golang.org/grpc/naming"
+)
+
+var (
+	defaultWatchWaitTime = 15 * time.Second
+
+	ErrFetchNodesTimeout = errors.New("fetch nodes raise timeout in consul")
 )
 
 // ConsulWatcher is the implementation of grpc.naming.Watcher
 type ConsulWatcher struct {
+	ctx context.Context
 	sync.RWMutex
 	running     bool
 	serviceName string
 	client      *api.Client
-	updateChan  chan []*naming.Update
 	addrs       []*naming.Update
+	waitTimeout time.Duration
 
 	addrsMap  map[string]struct{}
 	lastIndex uint64
 }
 
-func newConsulWatcher(serviceName string, client *api.Client) naming.Watcher {
+func newConsulWatcher(serviceName string, client *api.Client, ctx context.Context) naming.Watcher {
 	w := &ConsulWatcher{
 		serviceName: serviceName,
-		updateChan:  make(chan []*naming.Update),
 		running:     true,
 		client:      client,
+		ctx:         ctx,
+		waitTimeout: defaultWatchWaitTime,
 	}
 
 	return w
@@ -38,40 +47,61 @@ func newConsulWatcher(serviceName string, client *api.Client) naming.Watcher {
 
 func (w *ConsulWatcher) Close() {
 	w.running = false
-	close(w.updateChan)
+}
+
+func (w *ConsulWatcher) handleNext() ([]*naming.Update, error) {
+	var (
+		updates    []*naming.Update
+		updateChan = make(chan []*naming.Update)
+		errChan    = make(chan error)
+	)
+
+	// var ctx context.Context
+	// if w.waitTimeout == 0 {
+	// 	ctx = w.ctx
+	// } else {
+	// 	ctx, _ = context.WithTimeout(w.ctx, w.waitTimeout)
+	// }
+
+	go w.fetchNodes(w.ctx, updateChan, errChan)
+
+	select {
+	case updates = <-updateChan:
+		return updates, nil
+
+	case err := <-errChan:
+		return nil, err
+
+	case <-w.ctx.Done():
+		return updates, nil
+	}
 }
 
 func (w *ConsulWatcher) Next() ([]*naming.Update, error) {
-	fmt.Println(51)
-	// select {
-	// case updates := <-w.updates:
-	// 	return updates, nil
-	// }
-
-	nodes, err := w.FetchNodes()
-	fmt.Println(52)
-	fmt.Println(nodes, err)
-	return nodes, err
-	// return []*naming.Update{}, nil
+	return w.handleNext()
 }
 
-func (w *ConsulWatcher) FetchNodes() ([]*naming.Update, error) {
+func (w *ConsulWatcher) fetchNodes(ctx context.Context, updateChan chan []*naming.Update, errChan chan error) ([]*naming.Update, error) {
 	for w.running {
 		var (
 			updates []*naming.Update
 			addrs   = map[string]struct{}{}
 		)
 
+		queryOptions := &api.QueryOptions{
+			WaitIndex: w.lastIndex,   // wait event
+			WaitTime:  w.waitTimeout, // while: fetch with timeout, don't break
+		}
+		queryOptions.WithContext(ctx)
+
 		services, metainfo, err := w.client.Health().Service(
 			w.serviceName,
-			"",   // tag
-			true, // passing
-			&api.QueryOptions{
-				WaitIndex: w.lastIndex, // wait event
-			},
+			"",           // tag
+			true,         // passing
+			queryOptions, // opt
 		)
 		if err != nil {
-			grpclog.Println("error retrieving instances from Consul: %v", err)
+			errChan <- err
 			return nil, err
 		}
 
@@ -96,11 +126,13 @@ func (w *ConsulWatcher) FetchNodes() ([]*naming.Update, error) {
 
 		if len(updates) != 0 {
 			w.addrsMap = addrs
+			updateChan <- updates
 			return updates, nil
 		}
 	}
 
 	var updates = []*naming.Update{}
+	updateChan <- updates
 	return updates, nil
 }
 

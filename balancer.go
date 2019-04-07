@@ -2,11 +2,10 @@ package grpclb
 
 import (
 	"context"
-	"fmt"
 	"sync"
 
+	"github.com/rfyiamcool/grpclb-scheduler/log"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/grpclog"
 	"google.golang.org/grpc/naming"
 )
 
@@ -39,9 +38,8 @@ func NewBalancer(r naming.Resolver, selector Selector) grpc.Balancer {
 
 func (b *balancer) watchAddrUpdates() error {
 	updates, err := b.w.Next()
-	fmt.Println(42)
 	if err != nil {
-		grpclog.Printf("grpc: the naming watcher stops working due to %v.\n", err)
+		log.DefaultLogger("grpc: the naming watcher stops working due to %v.\n", err)
 		return err
 	}
 
@@ -59,7 +57,7 @@ func (b *balancer) watchAddrUpdates() error {
 		case naming.Delete:
 			b.selector.Delete(addr)
 		default:
-			grpclog.Println("Unknown update.Op ", update.Op)
+			log.DefaultLogger("Unknown update.Op ", update.Op)
 		}
 	}
 
@@ -72,7 +70,6 @@ func (b *balancer) watchAddrUpdates() error {
 	}
 
 	addrs := b.selector.AddrList()
-	fmt.Println(addrs)
 	b.addrCh <- addrs
 	return nil
 }

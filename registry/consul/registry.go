@@ -6,20 +6,20 @@ import (
 	"fmt"
 	"time"
 
-	consul "github.com/hashicorp/consul/api"
-	"google.golang.org/grpc/grpclog"
+	capi "github.com/hashicorp/consul/api"
+	"github.com/rfyiamcool/grpclb-scheduler/log"
 )
 
 type ConsulRegistry struct {
 	ctx     context.Context
 	cancel  context.CancelFunc
-	client  *consul.Client
+	client  *capi.Client
 	cfg     *Congfig
 	checkId string
 }
 
 type Congfig struct {
-	ConsulCfg   *consul.Config
+	ConsulCfg   *capi.Config
 	ServiceName string
 	NData       NodeData
 	TTL         int // ttl seconds
@@ -33,7 +33,7 @@ type NodeData struct {
 }
 
 func NewRegistry(cfg *Congfig) (*ConsulRegistry, error) {
-	c, err := consul.NewClient(cfg.ConsulCfg)
+	c, err := capi.NewClient(cfg.ConsulCfg)
 	if err != nil {
 		return nil, err
 	}
@@ -48,38 +48,25 @@ func NewRegistry(cfg *Congfig) (*ConsulRegistry, error) {
 	}, nil
 }
 
+func (c *ConsulRegistry) RegisterGRPCHealth() error {
+	checker := &capi.AgentServiceCheck{
+		Interval:                       fmt.Sprintf("%ds", c.cfg.TTL/2),
+		GRPC:                           fmt.Sprintf("%v:%v/%v", c.cfg.NData.Address, c.cfg.NData.Port, c.cfg.ServiceName),
+		DeregisterCriticalServiceAfter: "1m",
+	}
+
+	_, err := c.handleRegister(checker)
+	return err
+}
+
 func (c *ConsulRegistry) Register() error {
-
-	// register service
-	metadata, err := json.Marshal(c.cfg.NData.Metadata)
-	if err != nil {
-		return err
-	}
-	tags := make([]string, 0)
-	tags = append(tags, string(metadata))
-
-	registerHandler := func() error {
-		regisDto := &consul.AgentServiceRegistration{
-			ID:      c.cfg.NData.ID,
-			Name:    c.cfg.ServiceName,
-			Address: c.cfg.NData.Address,
-			Port:    c.cfg.NData.Port,
-			Tags:    tags,
-			Check: &consul.AgentServiceCheck{
-				TTL:                            fmt.Sprintf("%ds", c.cfg.TTL),
-				Status:                         consul.HealthPassing,
-				DeregisterCriticalServiceAfter: "1m",
-			},
-		}
-		err := c.client.Agent().ServiceRegister(regisDto)
-		if err != nil {
-			return fmt.Errorf("register service to consul error: %s\n", err.Error())
-		}
-
-		return nil
+	checker := &capi.AgentServiceCheck{
+		TTL:                            fmt.Sprintf("%ds", c.cfg.TTL),
+		Status:                         capi.HealthPassing,
+		DeregisterCriticalServiceAfter: "1m",
 	}
 
-	err = registerHandler()
+	regisger, err := c.handleRegister(checker)
 	if err != nil {
 		return err
 	}
@@ -98,16 +85,51 @@ func (c *ConsulRegistry) Register() error {
 		case <-keepAliveTicker.C:
 			err := c.client.Agent().PassTTL(c.checkId, "")
 			if err != nil {
-				grpclog.Printf("consul registry check %v.\n", err)
+				log.DefaultLogger("consul registry check %v.\n", err)
 			}
 
 		case <-registerTicker.C:
-			err = registerHandler()
+			err = regisger()
 			if err != nil {
-				grpclog.Printf("consul register service error: %v.\n", err)
+				log.DefaultLogger("consul register service error: %v.\n", err)
 			}
 		}
 	}
+}
+
+func (c *ConsulRegistry) handleRegister(checker *capi.AgentServiceCheck) (func() error, error) {
+	// register service
+	metadata, err := json.Marshal(c.cfg.NData.Metadata)
+	if err != nil {
+		return nil, err
+	}
+
+	tags := make([]string, 0)
+	tags = append(tags, string(metadata))
+
+	registerHandler := func() error {
+		regisDto := &capi.AgentServiceRegistration{
+			ID:      c.cfg.NData.ID,
+			Name:    c.cfg.ServiceName,
+			Address: c.cfg.NData.Address,
+			Port:    c.cfg.NData.Port,
+			Tags:    tags,
+			Check:   checker,
+		}
+		err := c.client.Agent().ServiceRegister(regisDto)
+		if err != nil {
+			return fmt.Errorf("register service to consul error: %s\n", err.Error())
+		}
+
+		return nil
+	}
+
+	err = registerHandler()
+	if err != nil {
+		return nil, err
+	}
+
+	return registerHandler, nil
 }
 
 func (c *ConsulRegistry) Deregister() error {

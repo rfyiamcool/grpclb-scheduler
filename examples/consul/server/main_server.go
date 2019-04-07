@@ -10,25 +10,49 @@ import (
 
 	capi "github.com/hashicorp/consul/api"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/health"
+	"google.golang.org/grpc/health/grpc_health_v1"
 
-	"github.com/rfyiamcool/grpc-scheduler/examples/proto"
-	"github.com/rfyiamcool/grpc-scheduler/registry/consul"
+	"github.com/rfyiamcool/grpclb-scheduler/examples/proto"
+	"github.com/rfyiamcool/grpclb-scheduler/registry/consul"
 )
 
-var nodeID = flag.String("node", "node1", "node ID")
-var port = flag.Int("port", 8080, "listening port")
+var (
+	nodeID      = flag.String("node", "node1", "node ID")
+	port        = flag.Int("port", 8080, "listening port")
+	ServiceName = "test"
+)
+
+type HealthImpl struct{}
+
+func (h *HealthImpl) Check(ctx context.Context, req *grpc_health_v1.HealthCheckRequest) (*grpc_health_v1.HealthCheckResponse, error) {
+	return &grpc_health_v1.HealthCheckResponse{
+		Status: grpc_health_v1.HealthCheckResponse_SERVING,
+	}, nil
+}
 
 type RpcServer struct {
-	addr string
-	s    *grpc.Server
+	addr   string
+	server *grpc.Server
 }
 
 func NewRpcServer(addr string) *RpcServer {
 	s := grpc.NewServer()
 	rs := &RpcServer{
-		addr: addr,
-		s:    s,
+		addr:   addr,
+		server: s,
 	}
+
+	proto.RegisterTestServer(s, rs)
+
+	healthCheck := health.NewServer()
+	healthCheck.SetServingStatus(
+		ServiceName,
+		grpc_health_v1.HealthCheckResponse_SERVING,
+	)
+	grpc_health_v1.RegisterHealthServer(s, healthCheck)
+
+	// grpc_health_v1.RegisterHealthServer(s, &HealthImpl{})
 	return rs
 }
 
@@ -38,14 +62,13 @@ func (s *RpcServer) Run() {
 		log.Printf("failed to listen: %v", err)
 		return
 	}
-	log.Printf("rpc listening on:%s", s.addr)
 
-	proto.RegisterTestServer(s.s, s)
-	s.s.Serve(listener)
+	log.Printf("rpc listening on:%s", s.addr)
+	s.server.Serve(listener)
 }
 
 func (s *RpcServer) Stop() {
-	s.s.GracefulStop()
+	s.server.GracefulStop()
 }
 
 func (s *RpcServer) Say(ctx context.Context, req *proto.SayReq) (*proto.SayResp, error) {
@@ -63,7 +86,7 @@ func StartService() {
 	registry, err := consul.NewRegistry(
 		&consul.Congfig{
 			ConsulCfg:   config,
-			ServiceName: "test",
+			ServiceName: ServiceName,
 			NData: consul.NodeData{
 				ID:      *nodeID,
 				Address: "127.0.0.1",
@@ -88,7 +111,8 @@ func StartService() {
 
 	wg.Add(1)
 	go func() {
-		registry.Register()
+		registry.RegisterGRPCHealth()
+		// registry.Register()
 		wg.Done()
 	}()
 
