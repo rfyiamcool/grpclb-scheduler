@@ -83,6 +83,7 @@ func (b *baseSelector) Delete(addr grpc.Address) error {
 	return AddrDoesNotExistErr
 }
 
+// Up set addr's state connected
 func (b *baseSelector) Up(addr grpc.Address) (cnt int, connected bool) {
 	a, ok := b.addrMap[addr.Addr]
 	if ok {

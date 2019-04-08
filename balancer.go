@@ -46,6 +46,12 @@ func (b *balancer) watchAddrUpdates() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	// double check
+	if b.done {
+		return grpc.ErrClientConnClosing
+	}
+
+	// update node to selector
 	for _, update := range updates {
 		addr := grpc.Address{
 			Addr:     update.Addr,
@@ -61,45 +67,42 @@ func (b *balancer) watchAddrUpdates() error {
 		}
 	}
 
-	if b.done {
-		return grpc.ErrClientConnClosing
-	}
-	select {
-	case <-b.addrCh:
-	default:
-	}
-
 	addrs := b.selector.AddrList()
 	b.addrCh <- addrs
 	return nil
 }
 
+// Start watch nodes updates in consul, sync nodes updates to selector
 func (b *balancer) Start(target string, config grpc.BalancerConfig) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.done {
 		return grpc.ErrClientConnClosing
 	}
+
 	if b.r == nil {
 		return nil
 	}
+
 	w, err := b.r.Resolve(target)
 	if err != nil {
 		return err
 	}
+
 	b.w = w
 	b.addrCh = make(chan []grpc.Address, 1)
 	go func() {
-		for {
+		for !b.done {
 			if err := b.watchAddrUpdates(); err != nil {
-				return
+				continue
 			}
 		}
 	}()
+
 	return nil
 }
 
-// Up sets the connected state of addr and sends notification if there are pending
+// Up grpc sets the connected state of addr and sends notification if there are pending
 // Get() calls.
 func (b *balancer) Up(addr grpc.Address) func(error) {
 	b.mu.Lock()
