@@ -3,11 +3,20 @@ package consul
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math/rand"
+	"net"
+	"os"
 	"time"
 
 	capi "github.com/hashicorp/consul/api"
+
 	"github.com/rfyiamcool/grpclb-scheduler/log"
+)
+
+var (
+	hostName, _ = os.Hostname()
 )
 
 type ConsulRegistry struct {
@@ -15,7 +24,7 @@ type ConsulRegistry struct {
 	cancel  context.CancelFunc
 	client  *capi.Client
 	cfg     *Congfig
-	checkId string
+	checkID string
 }
 
 type Congfig struct {
@@ -33,18 +42,26 @@ type NodeData struct {
 }
 
 func NewRegistry(cfg *Congfig) (*ConsulRegistry, error) {
+	// validate
+	if cfg.NData.ID == "" {
+		cfg.NData.ID = makeServerId()
+	}
+	if cfg.ServiceName == "" {
+		return nil, errors.New("invalid service name")
+	}
+
 	c, err := capi.NewClient(cfg.ConsulCfg)
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithCancel(context.Background())
 
+	ctx, cancel := context.WithCancel(context.Background())
 	return &ConsulRegistry{
 		ctx:     ctx,
 		cancel:  cancel,
 		client:  c,
 		cfg:     cfg,
-		checkId: "service:" + cfg.NData.ID,
+		checkID: "service:" + cfg.NData.ID,
 	}, nil
 }
 
@@ -83,7 +100,7 @@ func (c *ConsulRegistry) Register() error {
 			return nil
 
 		case <-keepAliveTicker.C:
-			err := c.client.Agent().PassTTL(c.checkId, "")
+			err := c.client.Agent().PassTTL(c.checkID, "")
 			if err != nil {
 				log.DefaultLogger("consul registry check %v.\n", err)
 			}
@@ -106,10 +123,16 @@ func (c *ConsulRegistry) handleRegister(checker *capi.AgentServiceCheck) (func()
 
 	tags := make([]string, 0)
 	tags = append(tags, string(metadata))
+	serviceID := fmt.Sprintf("%s-%s-%v-%v:%v",
+		c.cfg.NData.ID,
+		c.cfg.ServiceName,
+		hostName,
+		c.cfg.NData.Address, c.cfg.NData.Port,
+	)
 
 	registerHandler := func() error {
 		regisDto := &capi.AgentServiceRegistration{
-			ID:      c.cfg.NData.ID,
+			ID:      serviceID,
 			Name:    c.cfg.ServiceName,
 			Address: c.cfg.NData.Address,
 			Port:    c.cfg.NData.Port,
@@ -135,4 +158,26 @@ func (c *ConsulRegistry) handleRegister(checker *capi.AgentServiceCheck) (func()
 func (c *ConsulRegistry) Deregister() error {
 	c.cancel()
 	return nil
+}
+
+func localIP() string {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return ""
+	}
+
+	for _, address := range addrs {
+		if ipnet, ok := address.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+			if ipnet.IP.To4() != nil {
+				return ipnet.IP.String()
+			}
+		}
+	}
+
+	return ""
+}
+
+func makeServerId() string {
+	rand.Seed(time.Now().UnixNano())
+	return fmt.Sprintf("%v", uint64(rand.Int63()))
 }

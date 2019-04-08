@@ -1,5 +1,5 @@
-# grpclb-schduler
-This is a gRPC load balancer for go, supports Random, RoundRobin and consistent hashing strategies.
+# grpclb-scheduler
+This is a gRPC load balancer for go, supports Random, RoundRobin and smooth weigthed balance algo.
 
 ![](https://raw.githubusercontent.com/liyue201/grpc-lb/master/struct.png "")
 
