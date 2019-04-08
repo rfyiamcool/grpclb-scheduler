@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"time"
 
 	capi "github.com/hashicorp/consul/api"
 	"google.golang.org/grpc"
@@ -46,5 +47,9 @@ func main() {
 		}
 
 		log.Printf(resp.Content)
+
+		// for debug
+		log.Println("active sleep 2s, u can stop a node")
+		time.Sleep(2 * time.Second)
 	}
 }
