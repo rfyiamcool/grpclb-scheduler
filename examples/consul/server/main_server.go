@@ -23,14 +23,6 @@ var (
 	ServiceName = "test"
 )
 
-type HealthImpl struct{}
-
-func (h *HealthImpl) Check(ctx context.Context, req *grpc_health_v1.HealthCheckRequest) (*grpc_health_v1.HealthCheckResponse, error) {
-	return &grpc_health_v1.HealthCheckResponse{
-		Status: grpc_health_v1.HealthCheckResponse_SERVING,
-	}, nil
-}
-
 type RpcServer struct {
 	addr   string
 	server *grpc.Server
@@ -52,7 +44,6 @@ func NewRpcServer(addr string) *RpcServer {
 	)
 	grpc_health_v1.RegisterHealthServer(s, healthCheck)
 
-	// grpc_health_v1.RegisterHealthServer(s, &HealthImpl{})
 	return rs
 }
 
@@ -126,9 +117,6 @@ func StartService() {
 	wg.Wait()
 }
 
-//go run main.go -node node1 -port 28544
-//go run main.go -node node2 -port 18562
-//go run main.go -node node3 -port 27772
 func main() {
 	flag.Parse()
 	StartService()
